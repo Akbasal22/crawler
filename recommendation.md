@@ -1,5 +1,10 @@
 # Production Deployment Recommendations
 
-To deploy this crawler in a production environment, several architectural upgrades are necessary. The current SQLite database should be migrated to **PostgreSQL** for better concurrency, ACID guarantees at scale, and distributed deployment capabilities. Replace the in-memory queue with a message broker like **RabbitMQ** or **Redis** to enable horizontal scaling across multiple worker machines and provide persistent queue durability. Implement **robots.txt parsing** using the `robotparser` module to respect website crawling policies, add per-domain rate limiting to avoid overwhelming any single server, and include exponential backoff with retry logic for failed requests. Finally, containerize the application with **Docker** and deploy using **Kubernetes** or **Docker Compose** for orchestration, enabling easy scaling, monitoring with Prometheus/Grafana, and seamless updates with zero downtime.
+SQLite db should be transferred to a PostgreSQL db for better performance. In-memory queue should me moved to a message broker Redis. These will make the project scalable. Finally, containerize the application in Docker and deploy with Kubernetes into production environment. 
 
-Additional production hardening should include: implementing distributed locks (using Redis) to prevent duplicate URL processing across workers, adding comprehensive logging with structured logs shipped to a centralized system like ELK stack, setting up health checks and readiness probes for container orchestration, implementing circuit breakers for failing domains, adding authentication/authorization for the API and dashboard, using environment-based configuration management (avoiding hardcoded values), implementing database connection pooling, adding request/response caching layers, setting up automated backups and disaster recovery procedures, and establishing monitoring dashboards with alerts for queue depth, error rates, and worker health.
+Next steps should include, enabling to search other websites than just Wikipedia. A roboparse should be implemented to better respect website policies. Also a limit on maximum number of requests made on a single website should be implemented to prevent harming the website. Automated backups and disaster recovery procedures should be implemented in case of crawling to a harmful website.
+
+
+
+
+
