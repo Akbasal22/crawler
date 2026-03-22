@@ -344,7 +344,7 @@ PORT=8080 python app.py
    - User submits origin URL + max depth
    - Crawler clears previous pending queue
    - Seeds queue with origin URL at depth 0
-   - Starts 5 worker threads (if not already running)
+   - Starts 3 worker threads (if not already running)
    - Starts drainer thread (DB → RAM)
 
 3. **Worker Loop**
@@ -358,7 +358,7 @@ PORT=8080 python app.py
    - If depth < max_depth: enqueue discovered links
 
 4. **Back Pressure**
-   - In-memory queue limited to 500 URLs
+   - In-memory queue limited to 300 URLs
    - When full: `put()` blocks until space available
    - Drainer waits when queue full
    - Workers naturally slow down
