@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sir Crawls-A-Lot</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+  <header>
+    <h1>Sir Crawls-A-Lot</h1>
+    <p>High-performance multi-crawler web indexing system with real-time search</p>
+  </header>
+
+  <main>
+    <!-- Left Column: Control Panels -->
+    <section class="card">
+      <h2>Start Indexing</h2>
+      <form id="form-start" class="stack">
+        <label>
+          Origin URL
+          <input type="url" name="origin" placeholder="https://en.wikipedia.org/wiki/Python_(programming_language)"
+            required value="{{ status.job_origin or '' }}">
+        </label>
+        <label>
+          Max Depth
+          <input type="number" name="k" min="0" max="5" step="1" required value="{{ status.max_depth }}"
+            placeholder="2">
+        </label>
+        <button type="submit">Start Crawl</button>
+        <p id="start-msg" class="muted" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>🔍 Search Index</h2>
+      <form id="form-search" class="stack">
+        <label>
+          Query
+          <input type="search" name="q" placeholder="Search indexed pages..." autocomplete="off">
+        </label>
+        <button type="submit">Search</button>
+      </form>
+      <p id="search-meta" class="muted" aria-live="polite"></p>
+      <ul id="search-results" class="results"></ul>
+    </section>
+
+    <!-- Right Column: Monitoring Panels -->
+    <section class="card">
+      <h2>
+        <span class="status-dot"></span>
+        Active Crawlers
+      </h2>
+      <div id="crawlers-container">
+        <div class="empty-state">
+          <div class="empty-state-icon">😴</div>
+          <p>No active crawlers</p>
+        </div>
+      </div>
+      <div class="pill-links">
+        <a href="{{ url_for('api_health') }}" class="pill-link">Health Information</a>
+        <a href="{{ url_for('api_status') }}" class="pill-link">Status Information</a>
+        <a href="{{ url_for('api_crawlers') }}" class="pill-link">Crawlers Information</a>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Database Stats</h2>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <h3>Total Pages Indexed</h3>
+          <div class="stat-value" id="val-pages-db">{{ health.pages_count }}</div>
+          <div class="stat-label">across all crawlers</div>
+        </div>
+
+        <div class="stat-card">
+          <h3>Journal Mode</h3>
+          <div class="badge" id="val-journal">{{ health.journal_mode }}</div>
+        </div>
+
+        <div class="stat-card">
+          <h3>Queue Status</h3>
+          <div class="progress-container">
+            <div class="progress-bar" id="queue-progress">
+              <div class="progress-segment visited" style="width: 0%"></div>
+              <div class="progress-segment pending" style="width: 0%"></div>
+              <div class="progress-segment failed" style="width: 0%"></div>
+            </div>
+            <div class="progress-labels">
+              <span class="progress-label">
+                <span class="progress-dot" style="background: var(--accent-green)"></span>
+                <span id="queue-visited">0 visited</span>
+              </span>
+              <span class="progress-label">
+                <span class="progress-dot" style="background: var(--accent-yellow)"></span>
+                <span id="queue-pending">0 pending</span>
+              </span>
+              <span class="progress-label">
+                <span class="progress-dot" style="background: var(--accent-red)"></span>
+                <span id="queue-failed">0 failed</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+
+</html>

@@ -1,0 +1,7 @@
+crawler.db
+crawler.db-wal
+crawler.db-shm
+__pycache__/
+*.pyc
+.venv/
+venv/
