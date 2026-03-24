@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "crawler.db"
 
+# Storage directory for word index files (like p.data, a.data, etc.)
+STORAGE_DIR = BASE_DIR / "data" / "storage"
+STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS queue (
     url TEXT PRIMARY KEY,
@@ -249,6 +253,10 @@ def insert_page(
             logger.info(f"Indexed: {url} (depth {depth}) - {title or 'No title'}")
         finally:
             conn.close()
+        
+        # Create word index in storage files
+        index_page_words(url, origin_url, depth, title, html_content)
+        
     except Exception as e:
         logger.error(f"Failed to insert page {url}: {e}")
         raise
@@ -322,18 +330,29 @@ def count_pending(origin_url: str | None = None) -> int:
 
 def search_pages(query: str, limit: int = 200) -> list[dict[str, Any]]:
     """
-    Full-text search using FTS5 with frequency-based ranking.
+    Full-text search using word index files with relevance scoring.
     
-    Returns results sorted by word frequency: if searching "blockchain", 
-    a page with 6 instances ranks higher than a page with 3 instances.
+    Returns results sorted by relevance score (highest first).
     
-    CRITICAL PERFORMANCE NOTE: We do NOT search html_content with LIKE as it's 
-    extremely slow (requires scanning full HTML of every row). Instead, we use 
-    FTS5 for fast full-text search across title and content.
+    Relevance score formula:
+    score = (frequency × 10) + 1000 (if exact match) - (depth × 5)
+    
+    Falls back to FTS5 if word index files don't exist.
     """
     if not query:
         return []
     
+    query = query.strip().lower()
+    
+    # Try to search using word index files first
+    try:
+        results = _search_from_word_index(query, limit)
+        if results:
+            return results
+    except Exception as e:
+        logger.debug(f"Word index search failed, falling back to FTS5: {e}")
+    
+    # Fallback to FTS5 search with frequency counting
     try:
         conn = get_connection()
         try:
@@ -378,17 +397,22 @@ def search_pages(query: str, limit: int = 200) -> list[dict[str, Any]]:
                     content_count = content_lower.count(search_lower)
                     total_frequency = title_count + content_count
                     
+                    # Calculate relevance score using the formula
+                    # score = (frequency × 10) + 1000 (exact match bonus) - (depth × 5)
+                    depth = int(r["depth"])
+                    relevance_score = (total_frequency * 10) + 1000 - (depth * 5)
+                    
                     results.append({
                         "relevant_url": str(r["url"]),
                         "origin_url": str(r["origin_url"]),
-                        "depth": int(r["depth"]),
+                        "depth": depth,
                         "title": title if title else "No title",
                         "frequency": total_frequency,
-                        "relevance_score": float(r["relevance_score"]) if r["relevance_score"] else 0.0,
+                        "relevance_score": relevance_score,
                     })
                 
-                # Sort by frequency (highest first), then by BM25 relevance score
-                results.sort(key=lambda x: (-x["frequency"], x["relevance_score"]))
+                # Sort by relevance score (highest first)
+                results.sort(key=lambda x: -x["relevance_score"])
                 
                 logger.info(f"FTS5 search for '{query}' returned {len(results)} results")
                 return results
@@ -401,11 +425,11 @@ def search_pages(query: str, limit: int = 200) -> list[dict[str, Any]]:
                     """
                     SELECT url, origin_url, depth, title, html_content
                     FROM pages
-                    WHERE title LIKE ?
+                    WHERE title LIKE ? OR html_content LIKE ?
                     ORDER BY depth ASC, url ASC
                     LIMIT ?
                     """,
-                    (pattern, limit),
+                    (pattern, pattern, limit),
                 ).fetchall()
                 
                 # Count frequency in fallback mode too
@@ -423,17 +447,20 @@ def search_pages(query: str, limit: int = 200) -> list[dict[str, Any]]:
                     content_count = content_lower.count(search_lower)
                     total_frequency = title_count + content_count
                     
+                    depth = int(r["depth"])
+                    relevance_score = (total_frequency * 10) + 1000 - (depth * 5)
+                    
                     results.append({
                         "relevant_url": str(r["url"]),
                         "origin_url": str(r["origin_url"]),
-                        "depth": int(r["depth"]),
+                        "depth": depth,
                         "title": title if title else "No title",
                         "frequency": total_frequency,
-                        "relevance_score": 0.0,
+                        "relevance_score": relevance_score,
                     })
                 
-                # Sort by frequency
-                results.sort(key=lambda x: -x["frequency"])
+                # Sort by relevance score
+                results.sort(key=lambda x: -x["relevance_score"])
                 
                 logger.info(f"Fallback search for '{query}' returned {len(results)} results")
                 return results
@@ -443,6 +470,99 @@ def search_pages(query: str, limit: int = 200) -> list[dict[str, Any]]:
     except Exception as e:
         logger.error(f"Failed to search pages: {e}")
         return []
+
+
+def _search_from_word_index(query: str, limit: int) -> list[dict[str, Any]]:
+    """
+    Search using word index files (data/storage/*.data).
+    Format per line: word url origin_url depth frequency
+    """
+    query = query.lower().strip()
+    first_letter = query[0] if query else ''
+    storage_file = STORAGE_DIR / f"{first_letter}.data"
+    
+    if not storage_file.exists():
+        return []
+    
+    # Read matching entries from storage file
+    matches: list[dict[str, Any]] = []
+    
+    with storage_file.open('r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            
+            parts = line.split(' ', 4)
+            if len(parts) != 5:
+                continue
+            
+            word, url, origin_url, depth_str, freq_str = parts
+            
+            # Check if word matches query
+            if word != query:
+                continue
+            
+            try:
+                depth = int(depth_str)
+                frequency = int(freq_str)
+                
+                # Calculate relevance score
+                # score = (frequency × 10) + 1000 (exact match bonus) - (depth × 5)
+                relevance_score = (frequency * 10) + 1000 - (depth * 5)
+                
+                # Get title from database
+                title = _get_title_from_db(url)
+                
+                matches.append({
+                    "relevant_url": url,
+                    "origin_url": origin_url,
+                    "depth": depth,
+                    "title": title or "No title",
+                    "frequency": frequency,
+                    "relevance_score": relevance_score,
+                })
+            except ValueError:
+                continue
+    
+    # Sort by relevance score (highest first)
+    matches.sort(key=lambda x: -x["relevance_score"])
+    
+    # Limit results
+    results = matches[:limit]
+    
+    logger.info(f"Word index search for '{query}' returned {len(results)} results")
+    return results
+
+
+def clear_word_index_storage() -> None:
+    """
+    Clear all word index storage files (data/storage/*.data).
+    Call this when starting a fresh crawl.
+    """
+    try:
+        if STORAGE_DIR.exists():
+            for file in STORAGE_DIR.glob("*.data"):
+                file.unlink()
+            logger.info("Cleared word index storage files")
+    except Exception as e:
+        logger.error(f"Failed to clear word index storage: {e}")
+
+
+def _get_title_from_db(url: str) -> str | None:
+    """Get page title from database."""
+    try:
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                "SELECT title FROM pages WHERE url = ? LIMIT 1",
+                (url,)
+            ).fetchone()
+            return str(row["title"]) if row and row["title"] else None
+        finally:
+            conn.close()
+    except Exception:
+        return None
 
 
 def mark_queue_failed(url: str) -> None:
@@ -480,6 +600,111 @@ def get_meta(key: str, default: str = "") -> str:
     except Exception as e:
         logger.error(f"Failed to get meta {key}: {e}")
         return default
+
+
+def clear_all_pending(origin_url: str | None = None) -> int:
+    """
+    Clear all pending URLs from the queue table.
+    If origin_url is provided, only clear pending for that origin.
+    Returns the number of pending URLs that were cleared.
+    """
+    try:
+        conn = get_connection()
+        try:
+            if origin_url:
+                # Count pending before deletion
+                count_row = conn.execute(
+                    "SELECT COUNT(*) AS n FROM queue WHERE status = 'pending' AND origin_url = ?",
+                    (origin_url,)
+                ).fetchone()
+                count = int(count_row["n"]) if count_row else 0
+                
+                # Delete pending URLs for this origin
+                conn.execute(
+                    "DELETE FROM queue WHERE status = 'pending' AND origin_url = ?",
+                    (origin_url,)
+                )
+                conn.commit()
+            else:
+                # Count pending before deletion
+                count_row = conn.execute(
+                    "SELECT COUNT(*) AS n FROM queue WHERE status = 'pending'"
+                ).fetchone()
+                count = int(count_row["n"]) if count_row else 0
+                
+                # Delete all pending URLs
+                conn.execute("DELETE FROM queue WHERE status = 'pending'")
+                conn.commit()
+            
+            if count > 0:
+                logger.info(f"Cleared {count} pending URLs from queue")
+            
+            return count
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"Failed to clear pending URLs: {e}")
+        return 0
+
+
+def _extract_words(text: str) -> list[str]:
+    """
+    Extract words from text for indexing.
+    Converts to lowercase, removes special characters, keeps only alphanumeric.
+    """
+    import re
+    # Remove HTML tags first
+    text = re.sub(r'<[^>]+>', ' ', text)
+    # Convert to lowercase and extract words (alphanumeric only, min 3 chars)
+    words = re.findall(r'\b[a-z]{3,}\b', text.lower())
+    return words
+
+
+def _write_word_to_storage(word: str, url: str, origin_url: str, depth: int, frequency: int) -> None:
+    """
+    Write word index entry to storage file.
+    Format: word url origin_url depth frequency
+    Files are organized by first letter (e.g., p.data, a.data)
+    """
+    if not word or len(word) < 3:
+        return
+    
+    first_letter = word[0].lower()
+    storage_file = STORAGE_DIR / f"{first_letter}.data"
+    
+    try:
+        # Append to file (create if doesn't exist)
+        with storage_file.open('a', encoding='utf-8') as f:
+            f.write(f"{word} {url} {origin_url} {depth} {frequency}\n")
+    except Exception as e:
+        logger.error(f"Failed to write word index for '{word}' to {storage_file}: {e}")
+
+
+def index_page_words(url: str, origin_url: str, depth: int, title: str | None, html_content: str) -> None:
+    """
+    Extract words from page content and write to storage files.
+    Creates word frequency index for relevance scoring.
+    """
+    # Combine title and content for word extraction
+    full_text = ""
+    if title:
+        full_text += title + " "
+    if html_content:
+        full_text += html_content
+    
+    # Extract words
+    words = _extract_words(full_text)
+    
+    # Count word frequencies
+    word_freq: dict[str, int] = {}
+    for word in words:
+        word_freq[word] = word_freq.get(word, 0) + 1
+    
+    # Write to storage files
+    for word, frequency in word_freq.items():
+        _write_word_to_storage(word, url, origin_url, depth, frequency)
+    
+    logger.debug(f"Indexed {len(word_freq)} unique words from {url}")
 
 
 def clear_all_pending(origin_url: str | None = None) -> int:
